@@ -102,7 +102,7 @@ void setMotorSpeed(uint8_t motor, int32_t speed) {
         }
     }
 }
-uint32_t line_data(void) {
+float line_data(void) {
 	uint32_t sum = 0;
 	uint32_t weighted_sum = 0;
 	uint32_t onLine = 0;
@@ -119,7 +119,7 @@ uint32_t line_data(void) {
         return 255;  // Line lost condition
     }
 
-    return weighted_sum / sum;
+    return (float)weighted_sum / (float)sum;
 }
 
 /* USER CODE END 0 */
@@ -167,6 +167,7 @@ int main(void)
   pid.Ki=Ki;
   pid.Kd=Kd;
   arm_pid_init_f32(&pid, 1);
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 8);
   /* USER CODE END 2 */
 
   /* Infinite loop */
