@@ -34,6 +34,10 @@ ADC1.SamplingTime-8\#ChannelRegularConversion=ADC_SAMPLETIME_84CYCLES
 ADC1.SamplingTime-9\#ChannelRegularConversion=ADC_SAMPLETIME_84CYCLES
 ADC1.ScanConvMode=ENABLE
 ADC1.master=1
+<<<<<<< HEAD
+=======
+ARM.CMSIS-DSP.1.16.2_SwParameter=CMSISJjDSP\:Source;
+>>>>>>> 9dbc670 (CMSIS-DSP library set up)
 CAD.formats=
 CAD.pinconfig=
 CAD.provider=
@@ -100,7 +104,12 @@ Mcu.Pin7=PA4
 Mcu.Pin8=PA5
 Mcu.Pin9=PA6
 Mcu.PinsNb=22
+<<<<<<< HEAD
 Mcu.ThirdPartyNb=0
+=======
+Mcu.ThirdParty0=ARM.CMSIS-DSP.1.16.2
+Mcu.ThirdPartyNb=1
+>>>>>>> 9dbc670 (CMSIS-DSP library set up)
 Mcu.UserConstants=
 Mcu.UserName=STM32F411CEUx
 MxCube.Version=6.11.1

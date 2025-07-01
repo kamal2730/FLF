@@ -21,7 +21,6 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -51,7 +50,10 @@ UART_HandleTypeDef huart6;
 DMA_HandleTypeDef hdma_usart6_rx;
 
 /* USER CODE BEGIN PV */
-
+uint32_t adc_buffer[8];
+uint32_t sensorWeight[8] = {70, 60, 50, 40, 30, 20, 10, 0};
+uint32_t thresh[8] = {900,900,900,900,900,900,900,900};  // Threshold for black line detection
+uint32_t position;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -65,11 +67,54 @@ static void MX_TIM3_Init(void);
 static void MX_USART6_UART_Init(void);
 static void MX_NVIC_Init(void);
 /* USER CODE BEGIN PFP */
-
+void setMotorSpeed(uint8_t motor, int32_t speed);
+int line_data(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void setMotorSpeed(uint8_t motor, int32_t speed) {
+    uint16_t pwm = abs(speed);
+    if (pwm > 200) pwm = 200;  // Limit max speed
+
+    if (motor == 0) {  // Left motor
+        if (speed > 0) {
+            TIM1->CCR1 = pwm;
+            TIM1->CCR2 = 0;
+        } else {
+            TIM1->CCR1 = 0;
+            TIM1->CCR2 = pwm;
+        }
+    }
+    else if (motor == 1) {  // Right motor
+        if (speed > 0) {
+            TIM2->CCR1 = pwm;
+            TIM3->CCR1 = 0;
+        } else {
+            TIM2->CCR1 = 0;
+            TIM3->CCR1 = pwm;
+        }
+    }
+}
+uint32_t line_data(void) {
+	uint32_t sum = 0;
+	uint32_t weighted_sum = 0;
+	uint32_t onLine = 0;
+
+    for (int i = 0; i < 8; i++) {
+        if (adc_buffer[i] > thresh[i]) {
+            weighted_sum += sensorWeight[i];
+            sum += 1;
+            onLine = 1;
+        }
+    }
+
+    if (!onLine) {
+        return 255;  // Line lost condition
+    }
+
+    return weighted_sum / sum;
+}
 
 /* USER CODE END 0 */
 
@@ -120,6 +165,7 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
+	  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 8);
 
     /* USER CODE BEGIN 3 */
   }
