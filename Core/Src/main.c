@@ -21,6 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "arm_math.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -54,6 +55,11 @@ uint32_t adc_buffer[8];
 uint32_t sensorWeight[8] = {70, 60, 50, 40, 30, 20, 10, 0};
 uint32_t thresh[8] = {900,900,900,900,900,900,900,900};  // Threshold for black line detection
 uint32_t position;
+arm_pid_instance_f32 pid;
+float32_t Kp = 13.5f, Ki = 0.01f, Kd = 4.0f;
+float32_t error, output, last_position = 0;
+int32_t base_speed = 100; // adjust as needed
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -157,7 +163,10 @@ int main(void)
   /* Initialize interrupts */
   MX_NVIC_Init();
   /* USER CODE BEGIN 2 */
-
+  pid.Kp=Kp;
+  pid.Ki=Ki;
+  pid.Kd=Kd;
+  arm_pid_init_f32(&pid, 1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -166,6 +175,22 @@ int main(void)
   {
     /* USER CODE END WHILE */
 	  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 8);
+	  HAL_Delay(5);
+
+	  position=line_data();
+
+	  if (position == 255) {
+		  setMotorSpeed(0, -base_speed);
+	      setMotorSpeed(1, base_speed);
+	      continue;
+	  }
+	  error = ((float32_t)position - 35.0f);
+	  output = arm_pid_f32(&pid, error);
+
+	  // Adjust motor speeds
+	  setMotorSpeed(0, base_speed - (int32_t)output);  // Left motor
+	  setMotorSpeed(1, base_speed + (int32_t)output);  // Right motor
+
 
     /* USER CODE BEGIN 3 */
   }
