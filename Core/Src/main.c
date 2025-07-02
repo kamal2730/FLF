@@ -171,16 +171,49 @@ void setPIDParameter(char *input) {
     HAL_UART_Transmit(&huart6,msg, strlen(msg), HAL_MAX_DELAY);
 }
 
-void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size){
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
+    if (huart->Instance == USART6) {
+        memset(main_buffer, '\0', 16);
+        memcpy(main_buffer, rx_buffer, Size);
+        memset(rx_buffer, '\0', 16);
+        main_buffer[Size] = '\0';
 
-	if (huart->Instance == USART6){
-		memset(main_buffer , '\0' , 16);
-		memcpy(main_buffer , rx_buffer , Size);
-		memset(rx_buffer , '\0' , 16);
-		HAL_UARTEx_ReceiveToIdle_DMA(&huart6, rx_buffer, 16);
-		__HAL_DMA_DISABLE_IT(&hdma_usart6_rx , DMA_IT_HT);
-		setPIDParameter((uint8_t*) main_buffer);
-	}
+        int len = strlen((char*)main_buffer);
+        while (len > 0 && (main_buffer[len-1] == '\r' || main_buffer[len-1] == '\n')) {
+            main_buffer[--len] = '\0';
+        }
+
+        // Handle 'Q' query
+        if (strcmp((char*)main_buffer, "Q") == 0) {
+            char status[128];
+
+            // Send PID values
+            snprintf(status, sizeof(status),
+                "Kp=%d.%02d Ki=%d.%03d Kd=%d.%02d\nThresh: ",
+                (int)Kp, (int)(Kp * 100) % 100,
+                (int)Ki, (int)(Ki * 1000) % 1000,
+                (int)Kd, (int)(Kd * 100) % 100);
+            HAL_UART_Transmit(&huart6, (uint8_t*)status, strlen(status), HAL_MAX_DELAY);
+
+            // Send all 8 threshold values in one line
+            for (int i = 0; i < 8; i++) {
+                char tbuf[8];
+                sprintf(tbuf, "%d ", thresh[i]);
+                HAL_UART_Transmit(&huart6, (uint8_t*)tbuf, strlen(tbuf), HAL_MAX_DELAY);
+            }
+
+            HAL_UART_Transmit(&huart6, (uint8_t*)"\n", 1, HAL_MAX_DELAY);
+        }
+
+        // Fallback: PID parameter input
+        else {
+            setPIDParameter((char*) main_buffer);
+        }
+
+        // Restart DMA reception
+        HAL_UARTEx_ReceiveToIdle_DMA(&huart6, rx_buffer, 16);
+        __HAL_DMA_DISABLE_IT(&hdma_usart6_rx, DMA_IT_HT);
+    }
 }
 /* USER CODE END 0 */
 
@@ -223,6 +256,17 @@ int main(void)
   /* Initialize interrupts */
   MX_NVIC_Init();
   /* USER CODE BEGIN 2 */
+  HAL_ADC_Start_IT(&hadc1);
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*) adc_buffer, 8);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+  HAL_UARTEx_ReceiveToIdle_DMA(&huart6, rx_buffer, 16);
+  __HAL_DMA_DISABLE_IT(&hdma_usart6_rx , DMA_IT_HT);
+
+
+
   pid.Kp=Kp;
   pid.Ki=Ki;
   pid.Kd=Kd;
