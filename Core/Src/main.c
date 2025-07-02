@@ -75,6 +75,9 @@ static void MX_NVIC_Init(void);
 /* USER CODE BEGIN PFP */
 void setMotorSpeed(uint8_t motor, int32_t speed);
 int line_data(void);
+void setPIDParameter(char *input);
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -122,6 +125,51 @@ float line_data(void) {
     return (float)weighted_sum / (float)sum;
 }
 
+void setPIDParameter(char *input) {
+    char *ptr = input;
+
+    while (*ptr != '\0') {
+        char type = *ptr;
+        ptr++;
+
+        char valueStr[10] = {0};
+        int i = 0;
+
+        while (*ptr != 'P' && *ptr != 'p' && *ptr != 'I' && *ptr != 'i' && *ptr != 'D' && *ptr != 'd' && *ptr != 'T' && *ptr != 't' && *ptr != '\0') {
+            valueStr[i++] = *ptr++;
+        }
+
+        float value = atof(valueStr);
+
+        switch (type) {
+            case 'P': case 'p':
+                Kp = value;
+                break;
+            case 'I': case 'i':
+                Ki = value;
+                break;
+            case 'D': case 'd':
+                Kd = value;
+                break;
+            case 'T': case 't':
+            	thresh = value;
+                break;
+        }
+
+    }
+}
+
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size){
+
+	if (huart->Instance == USART6){
+		memset(main_buffer , '\0' , 16);
+		memcpy(main_buffer , rx_buffer , Size);
+		memset(rx_buffer , '\0' , 16);
+		HAL_UARTEx_ReceiveToIdle_DMA(&huart6, rx_buffer, 16);
+		__HAL_DMA_DISABLE_IT(&hdma_usart6_rx , DMA_IT_HT);
+		setPIDParameter((uint8_t*) main_buffer);
+	}
+}
 /* USER CODE END 0 */
 
 /**
