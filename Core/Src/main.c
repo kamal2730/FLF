@@ -22,6 +22,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "arm_math.h"
+#include "string.h"
+#include "math.h"
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -54,11 +57,13 @@ DMA_HandleTypeDef hdma_usart6_rx;
 uint32_t adc_buffer[8];
 uint32_t sensorWeight[8] = {70, 60, 50, 40, 30, 20, 10, 0};
 uint32_t thresh[8] = {900,900,900,900,900,900,900,900};  // Threshold for black line detection
-uint32_t position;
+float32_t position;
 arm_pid_instance_f32 pid;
 float32_t Kp = 13.5f, Ki = 0.01f, Kd = 4.0f;
 float32_t error, output, last_position = 0;
-int32_t base_speed = 100; // adjust as needed
+int32_t base_speed = 200; // adjust as needed
+
+uint8_t rx_buffer[16], main_buffer[16];
 
 /* USER CODE END PV */
 
@@ -74,7 +79,7 @@ static void MX_USART6_UART_Init(void);
 static void MX_NVIC_Init(void);
 /* USER CODE BEGIN PFP */
 void setMotorSpeed(uint8_t motor, int32_t speed);
-int line_data(void);
+float line_data(void);
 void setPIDParameter(char *input);
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size);
 
@@ -144,19 +149,26 @@ void setPIDParameter(char *input) {
         switch (type) {
             case 'P': case 'p':
                 Kp = value;
+                pid.Kp = Kp;
                 break;
             case 'I': case 'i':
                 Ki = value;
+                pid.Ki = Ki;
                 break;
             case 'D': case 'd':
                 Kd = value;
+                pid.Kd = Kd;
                 break;
             case 'T': case 't':
-            	thresh = value;
+            	for (int i = 0; i < 8; i++) {
+            	        thresh[i] = (uint32_t)value;
+            	 }
                 break;
         }
 
     }
+    char msg[]="PID UPDATED !";
+    HAL_UART_Transmit(&huart6,msg, strlen(msg), HAL_MAX_DELAY);
 }
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size){
