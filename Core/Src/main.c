@@ -29,7 +29,18 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct __attribute__((packed)) {
+  char      header_start;         // Should be '<'
+  char      header_end;           // Should be '>'
+  float     position;
+  uint16_t  sensor_values[9];     // Your GUI is configured for 9 sensors
+  uint8_t   status_code;
+  float     kp;
+  float     ki;
+  float     kd;
+  uint16_t  threshold;
+  uint8_t   base_speed;
+} TelemetryPacket;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -54,17 +65,20 @@ UART_HandleTypeDef huart6;
 DMA_HandleTypeDef hdma_usart6_rx;
 
 /* USER CODE BEGIN PV */
+float32_t Kp = 13.5f, Ki = 0.01f, Kd = 4.0f;
+uint16_t sensor_threshold = 900;
+uint8_t base_speed = 200;
+volatile uint8_t status_to_send = 0;
+
 uint32_t adc_buffer[8];
 uint32_t sensorWeight[8] = {70, 60, 50, 40, 30, 20, 10, 0};
-uint32_t thresh[8] = {900,900,900,900,900,900,900,900};  // Threshold for black line detection
 float32_t position;
 arm_pid_instance_f32 pid;
-float32_t Kp = 13.5f, Ki = 0.01f, Kd = 4.0f;
-float32_t error, output, last_position = 0;
-int32_t base_speed = 200; // adjust as needed
 
-uint8_t rx_buffer[16], main_buffer[16];
-
+#define RX_BUFFER_SIZE 32
+uint8_t rx_buffer[RX_BUFFER_SIZE];
+uint32_t last_telemetry_time = 0; // Stores the last time we sent data
+const uint32_t TELEMETRY_INTERVAL_MS = 20;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -80,8 +94,8 @@ static void MX_NVIC_Init(void);
 /* USER CODE BEGIN PFP */
 void setMotorSpeed(uint8_t motor, int32_t speed);
 float line_data(void);
-void setPIDParameter(char *input);
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size);
+void send_telemetry_data(float current_position) ;
 
 /* USER CODE END PFP */
 
@@ -116,7 +130,7 @@ float line_data(void) {
 	uint32_t onLine = 0;
 
     for (int i = 0; i < 8; i++) {
-        if (adc_buffer[i] > thresh[i]) {
+        if (adc_buffer[i] > sensor_threshold) {
             weighted_sum += sensorWeight[i];
             sum += 1;
             onLine = 1;
@@ -130,88 +144,95 @@ float line_data(void) {
     return (float)weighted_sum / (float)sum;
 }
 
-void setPIDParameter(char *input) {
-    char *ptr = input;
+void send_telemetry_data(float current_position) {
+    static TelemetryPacket packet;
 
-    while (*ptr != '\0') {
-        char type = *ptr;
-        ptr++;
+    // 1. Set header
+    packet.header_start = '<';
+    packet.header_end = '>';
 
-        char valueStr[10] = {0};
-        int i = 0;
+    // 2. Add the live position data
+    packet.position = current_position;
 
-        while (*ptr != 'P' && *ptr != 'p' && *ptr != 'I' && *ptr != 'i' && *ptr != 'D' && *ptr != 'd' && *ptr != 'T' && *ptr != 't' && *ptr != '\0') {
-            valueStr[i++] = *ptr++;
-        }
-
-        float value = atof(valueStr);
-
-        switch (type) {
-            case 'P': case 'p':
-                Kp = value;
-                pid.Kp = Kp;
-                break;
-            case 'I': case 'i':
-                Ki = value;
-                pid.Ki = Ki;
-                break;
-            case 'D': case 'd':
-                Kd = value;
-                pid.Kd = Kd;
-                break;
-            case 'T': case 't':
-            	for (int i = 0; i < 8; i++) {
-            	        thresh[i] = (uint32_t)value;
-            	 }
-                break;
-        }
-
+    // 3. Fill sensor data
+    for(int i = 0; i < 8; i++) {
+        packet.sensor_values[i] = (uint16_t)adc_buffer[i];
     }
-    char msg[]="PID UPDATED !";
-    HAL_UART_Transmit(&huart6,msg, strlen(msg), HAL_MAX_DELAY);
+    packet.sensor_values[8] = 0; // 9th sensor is unused
+
+    // 4. Fill with LIVE robot state
+    packet.status_code = status_to_send;
+    packet.kp = Kp;
+    packet.ki = Ki;
+    packet.kd = Kd;
+    packet.threshold = sensor_threshold;
+    packet.base_speed = (uint8_t)base_speed;
+
+    // 5. Transmit the packet
+    HAL_UART_Transmit(&huart6, (uint8_t*)&packet, sizeof(TelemetryPacket), 100);
+
+    // 6. Reset the status code after sending
+    status_to_send = 0;
+}
+void handle_received_command(uint8_t* buffer, uint16_t len) {
+  // Create a local, null-terminated copy to work with safely.
+  char cmd_string[len + 1];
+  memcpy(cmd_string, buffer, len);
+  cmd_string[len] = '\0';
+
+  // Find the separator character ':'
+  char* colon_ptr = strchr(cmd_string, ':');
+
+  // Check if the separator was found
+  if (colon_ptr != NULL) {
+    // If found, temporarily replace it with a null terminator
+    // to split the string into two parts: the KEY and the VALUE.
+    *colon_ptr = '\0';
+
+    // The first part of the string is now the KEY
+    char* key = cmd_string;
+
+    // The part after the original colon is the VALUE string
+    char* value_str = colon_ptr + 1;
+
+    // Convert the value string to a float
+    float value = atof(value_str);
+
+    // Now, compare the key and update the corresponding variable
+    if (strcmp(key, "KP") == 0) {
+      Kp = value;
+      status_to_send = 1; // Set status to "Constants Updated"
+    } else if (strcmp(key, "KI") == 0) {
+      Ki = value;
+      status_to_send = 1;
+    } else if (strcmp(key, "KD") == 0) {
+      Kd = value;
+      status_to_send = 1;
+    } else if (strcmp(key, "TH") == 0) {
+      sensor_threshold = (uint16_t)value;
+      status_to_send = 1;
+    } else if (strcmp(key, "BS") == 0) {
+      base_speed = (int32_t)value;
+      status_to_send = 1;
+    } else {
+      // The key was valid, but not one we recognize
+      status_to_send = 200; // "ERROR: Unknown Command"
+    }
+  } else {
+    // The colon separator was not found, so the format is wrong.
+    status_to_send = 200; // "ERROR: Unknown Command"
+  }
 }
 
-void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
+
+// This callback is automatically called by the HAL when a command arrives.
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
+{
     if (huart->Instance == USART6) {
-        memset(main_buffer, '\0', 16);
-        memcpy(main_buffer, rx_buffer, Size);
-        memset(rx_buffer, '\0', 16);
-        main_buffer[Size] = '\0';
+        handle_received_command(rx_buffer, Size);
 
-        int len = strlen((char*)main_buffer);
-        while (len > 0 && (main_buffer[len-1] == '\r' || main_buffer[len-1] == '\n')) {
-            main_buffer[--len] = '\0';
-        }
-
-        // Handle 'Q' query
-        if (strcmp((char*)main_buffer, "Q") == 0) {
-            char status[128];
-
-            // Send PID values
-            snprintf(status, sizeof(status),
-                "Kp=%d.%02d Ki=%d.%03d Kd=%d.%02d\nThresh: ",
-                (int)Kp, (int)(Kp * 100) % 100,
-                (int)Ki, (int)(Ki * 1000) % 1000,
-                (int)Kd, (int)(Kd * 100) % 100);
-            HAL_UART_Transmit(&huart6, (uint8_t*)status, strlen(status), HAL_MAX_DELAY);
-
-            // Send all 8 threshold values in one line
-            for (int i = 0; i < 8; i++) {
-                char tbuf[8];
-                sprintf(tbuf, "%d ", thresh[i]);
-                HAL_UART_Transmit(&huart6, (uint8_t*)tbuf, strlen(tbuf), HAL_MAX_DELAY);
-            }
-
-            HAL_UART_Transmit(&huart6, (uint8_t*)"\n", 1, HAL_MAX_DELAY);
-        }
-
-        // Fallback: PID parameter input
-        else {
-            setPIDParameter((char*) main_buffer);
-        }
-
-        // Restart DMA reception
-        HAL_UARTEx_ReceiveToIdle_DMA(&huart6, rx_buffer, 16);
+        // IMPORTANT: Restart listening for the next command.
+        HAL_UARTEx_ReceiveToIdle_DMA(&huart6, rx_buffer, RX_BUFFER_SIZE);
         __HAL_DMA_DISABLE_IT(&hdma_usart6_rx, DMA_IT_HT);
     }
 }
@@ -262,8 +283,8 @@ int main(void)
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-  HAL_UARTEx_ReceiveToIdle_DMA(&huart6, rx_buffer, 16);
-  __HAL_DMA_DISABLE_IT(&hdma_usart6_rx , DMA_IT_HT);
+  HAL_UARTEx_ReceiveToIdle_DMA(&huart6, rx_buffer, RX_BUFFER_SIZE);
+  __HAL_DMA_DISABLE_IT(&hdma_usart6_rx, DMA_IT_HT);
 
 
 
@@ -279,22 +300,37 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-	  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 8);
-	  HAL_Delay(5);
+	  uint32_t current_time = HAL_GetTick();
+	  if (current_time - last_telemetry_time >= TELEMETRY_INTERVAL_MS){
+	      last_telemetry_time = current_time;
 
-	  position=line_data();
+	      pid.Kp = Kp;
+	      pid.Ki = Ki;
+	      pid.Kd = Kd;
 
-	  if (position == 255) {
-		  setMotorSpeed(0, -base_speed);
-	      setMotorSpeed(1, base_speed);
-	      continue;
-	  }
-	  error = ((float32_t)position - 35.0f);
-	  output = arm_pid_f32(&pid, error);
 
-	  // Adjust motor speeds
-	  setMotorSpeed(0, base_speed - (int32_t)output);  // Left motor
-	  setMotorSpeed(1, base_speed + (int32_t)output);  // Right motor
+	      HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 8);
+	      position = line_data();
+
+
+	      if (position == 255) {
+//	    	reset pid
+	    	arm_pid_reset_f32(&pid);
+	        setMotorSpeed(0, -base_speed);
+	        setMotorSpeed(1, base_speed);
+	      } else {
+	        float32_t error = ((float32_t)position - 35.0f);
+	        float32_t output = arm_pid_f32(&pid, error);
+
+
+	        // Adjust motor speeds
+	        setMotorSpeed(0, base_speed - (int32_t)output);
+	        setMotorSpeed(1, base_speed + (int32_t)output);
+	      }
+
+
+	      send_telemetry_data(position);
+	    }
 
 
     /* USER CODE BEGIN 3 */
@@ -613,7 +649,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 1000-1;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 100;
+  htim3.Init.Period = 200;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
