@@ -18,13 +18,13 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "arm_math.h"
 #include "string.h"
 #include "math.h"
 #include <stdlib.h>
+#include "FLASH_SECTOR_F4.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -45,7 +45,8 @@ typedef struct __attribute__((packed)) {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define TELEMETRY_DATA_ADDRESS 0x08060000
+#define PACKET_SIZE_WORDS (sizeof(TelemetryPacket) / 4)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -96,6 +97,8 @@ void setMotorSpeed(uint8_t motor, int32_t speed);
 float line_data(void);
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size);
 void send_telemetry_data(float current_position) ;
+void flash_update(void);
+void flash_write(void);
 
 /* USER CODE END PFP */
 
@@ -144,23 +147,51 @@ float line_data(void) {
     return (float)weighted_sum / (float)sum;
 }
 
+int is_flash_data_valid(TelemetryPacket* pkt){
+    if (pkt->header_start == '<' && pkt->header_end == '>'){return 1;}
+    return 0;
+}
+void flash_write(void){
+    TelemetryPacket packet_to_save;
+    packet_to_save.header_start = '<';
+    packet_to_save.header_end   = '>';
+    packet_to_save.kp          = Kp;
+    packet_to_save.ki          = Ki;
+    packet_to_save.kd          = Kd;
+    packet_to_save.threshold   = sensor_threshold;
+    packet_to_save.base_speed  = base_speed;
+    packet_to_save.position      = 0;
+    packet_to_save.status_code   = 0;
+    memset(packet_to_save.sensor_values, 0, sizeof(packet_to_save.sensor_values));
+    Flash_Write_Data(TELEMETRY_DATA_ADDRESS, (uint32_t*)&packet_to_save, PACKET_SIZE_WORDS);
+}
+void flash_update(void)
+{
+    TelemetryPacket flash_buffer;
+    Flash_Read_Data(TELEMETRY_DATA_ADDRESS, (uint32_t*)&flash_buffer, PACKET_SIZE_WORDS);
+    if (is_flash_data_valid(&flash_buffer))
+    {
+        Kp               = flash_buffer.kp;
+        Ki               = flash_buffer.ki;
+        Kd               = flash_buffer.kd;
+        sensor_threshold = flash_buffer.threshold;
+        base_speed       = flash_buffer.base_speed;
+    }
+    else
+    {
+        flash_write();
+    }
+}
 void send_telemetry_data(float current_position) {
     static TelemetryPacket packet;
-
-    // 1. Set header
     packet.header_start = '<';
     packet.header_end = '>';
-
-    // 2. Add the live position data
     packet.position = current_position;
-
-    // 3. Fill sensor data
     for(int i = 0; i < 8; i++) {
         packet.sensor_values[i] = (uint16_t)adc_buffer[i];
     }
-    packet.sensor_values[8] = 0; // 9th sensor is unused
+    packet.sensor_values[8] = 0;
 
-    // 4. Fill with LIVE robot state
     packet.status_code = status_to_send;
     packet.kp = Kp;
     packet.ki = Ki;
@@ -168,59 +199,70 @@ void send_telemetry_data(float current_position) {
     packet.threshold = sensor_threshold;
     packet.base_speed = (uint8_t)base_speed;
 
-    // 5. Transmit the packet
     HAL_UART_Transmit(&huart6, (uint8_t*)&packet, sizeof(TelemetryPacket), 100);
 
-    // 6. Reset the status code after sending
     status_to_send = 0;
 }
-void handle_received_command(uint8_t* buffer, uint16_t len) {
-  // Create a local, null-terminated copy to work with safely.
+void handle_received_command(uint8_t* buffer, uint16_t len)
+{
   char cmd_string[len + 1];
   memcpy(cmd_string, buffer, len);
   cmd_string[len] = '\0';
 
-  // Find the separator character ':'
   char* colon_ptr = strchr(cmd_string, ':');
 
-  // Check if the separator was found
-  if (colon_ptr != NULL) {
-    // If found, temporarily replace it with a null terminator
-    // to split the string into two parts: the KEY and the VALUE.
+  if (colon_ptr != NULL)
+  {
     *colon_ptr = '\0';
-
-    // The first part of the string is now the KEY
     char* key = cmd_string;
-
-    // The part after the original colon is the VALUE string
     char* value_str = colon_ptr + 1;
-
-    // Convert the value string to a float
     float value = atof(value_str);
+    int setting_updated = 0;
 
-    // Now, compare the key and update the corresponding variable
-    if (strcmp(key, "KP") == 0) {
+    if (strcmp(key, "KP") == 0)
+    {
       Kp = value;
-      status_to_send = 1; // Set status to "Constants Updated"
-    } else if (strcmp(key, "KI") == 0) {
-      Ki = value;
-      status_to_send = 1;
-    } else if (strcmp(key, "KD") == 0) {
-      Kd = value;
-      status_to_send = 1;
-    } else if (strcmp(key, "TH") == 0) {
-      sensor_threshold = (uint16_t)value;
-      status_to_send = 1;
-    } else if (strcmp(key, "BS") == 0) {
-      base_speed = (int32_t)value;
-      status_to_send = 1;
-    } else {
-      // The key was valid, but not one we recognize
-      status_to_send = 200; // "ERROR: Unknown Command"
+      setting_updated = 1;
     }
-  } else {
-    // The colon separator was not found, so the format is wrong.
-    status_to_send = 200; // "ERROR: Unknown Command"
+    else if (strcmp(key, "KI") == 0)
+    {
+      Ki = value;
+      setting_updated = 1;
+    }
+    else if (strcmp(key, "KD") == 0)
+    {
+      Kd = value;
+      setting_updated = 1;
+    }
+    else if (strcmp(key, "TH") == 0)
+    {
+      sensor_threshold = (uint16_t)value;
+      setting_updated = 1;
+    }
+    else if (strcmp(key, "BS") == 0)
+    {
+      base_speed = (int32_t)value;
+      setting_updated = 1;
+    }
+    else
+    {
+      status_to_send = 200;
+    }
+
+    if (setting_updated)
+    {
+      status_to_send = 1;
+      flash_write();
+
+      // IMPROVEMENT: Update the live PID parameters only when they change.
+      pid.Kp = Kp;
+      pid.Ki = Ki;
+      pid.Kd = Kd;
+    }
+  }
+  else
+  {
+    status_to_send = 200;
   }
 }
 
@@ -277,7 +319,10 @@ int main(void)
   /* Initialize interrupts */
   MX_NVIC_Init();
   /* USER CODE BEGIN 2 */
-  HAL_ADC_Start_IT(&hadc1);
+
+  flash_update();
+
+
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*) adc_buffer, 8);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
@@ -292,7 +337,6 @@ int main(void)
   pid.Ki=Ki;
   pid.Kd=Kd;
   arm_pid_init_f32(&pid, 1);
-  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 8);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -304,12 +348,6 @@ int main(void)
 	  if (current_time - last_telemetry_time >= TELEMETRY_INTERVAL_MS){
 	      last_telemetry_time = current_time;
 
-	      pid.Kp = Kp;
-	      pid.Ki = Ki;
-	      pid.Kd = Kd;
-
-
-	      HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 8);
 	      position = line_data();
 
 
