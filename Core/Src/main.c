@@ -67,9 +67,10 @@ UART_HandleTypeDef huart6;
 DMA_HandleTypeDef hdma_usart6_rx;
 
 /* USER CODE BEGIN PV */
-float32_t Kp = 2.5f, Ki = 0.0f, Kd = 0.0f;
+float32_t Kp = 2.5f, Ki = 0.0f, Kd = 0.5f;
 uint16_t sensor_threshold = 900;
 uint8_t base_speed = 100;
+uint8_t turn_speed = 60;
 volatile uint8_t status_to_send = 0;
 
 uint32_t adc_buffer[8];
@@ -83,6 +84,7 @@ uint32_t last_telemetry_time = 0; // Stores the last time we sent data
 const uint32_t TELEMETRY_INTERVAL_MS = 20;
 
 int last_known_turn_direction = 0;
+int last_last_known_turn_direction=1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -297,6 +299,7 @@ int main(void)
   pid.Kp=Kp;
   pid.Ki=Ki;
   pid.Kd=Kd;
+
   arm_pid_init_f32(&pid, 1);
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 8);
   /* USER CODE END 2 */
@@ -323,6 +326,9 @@ int main(void)
 
 	      HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 8);
 	      position = line_data();
+	      if (last_known_turn_direction!=0){
+	    	  last_last_known_turn_direction=last_known_turn_direction;
+	      }
 	      last_known_turn_direction = (position > 52 && position <= 70) ? -1 : ((position < 20 && position != 255) ? 1 : last_known_turn_direction);
 
 
@@ -331,15 +337,19 @@ int main(void)
 	              arm_pid_reset_f32(&pid);
 
 	              if (last_known_turn_direction == 1) { // We were heading into a right turn
-	                  setMotorSpeed(0, base_speed/2);
-	                  setMotorSpeed(1, -base_speed/2);
+	                  setMotorSpeed(0, turn_speed);
+	                  setMotorSpeed(1, -turn_speed);
 	              } else if (last_known_turn_direction == -1) { // We were heading into a left turn
-	                  setMotorSpeed(0, -base_speed/2);
-	                  setMotorSpeed(1, base_speed/2);
+	                  setMotorSpeed(0, -turn_speed);
+	                  setMotorSpeed(1, turn_speed);
 	              } else {
-	                  // Line lost unexpectedly on a straight, just stop for safety.
-	                  setMotorSpeed(0, 0);
-	                  setMotorSpeed(1, 0);
+	            	  if (last_last_known_turn_direction == 1) { // We were heading into a right turn
+	            		  setMotorSpeed(0, turn_speed);
+	            		  setMotorSpeed(1, -turn_speed);
+	            	  } else if (last_last_known_turn_direction == -1) { // We were heading into a left turn
+	            		  setMotorSpeed(0, -turn_speed);
+	            		  setMotorSpeed(1, turn_speed);
+	            	  }
 	              }
 	            } else {
 	              error = ((float32_t)position - 35.0f);
