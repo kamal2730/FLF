@@ -40,6 +40,8 @@ typedef struct __attribute__((packed)) {
   float     kd;
   uint16_t  threshold;
   uint8_t   base_speed;
+  float 	pid_error;
+  float 	pid_output;
 } TelemetryPacket;
 /* USER CODE END PTD */
 
@@ -65,9 +67,9 @@ UART_HandleTypeDef huart6;
 DMA_HandleTypeDef hdma_usart6_rx;
 
 /* USER CODE BEGIN PV */
-float32_t Kp = 13.5f, Ki = 0.01f, Kd = 4.0f;
+float32_t Kp = 2.5f, Ki = 0.0f, Kd = 1.2f;
 uint16_t sensor_threshold = 900;
-uint8_t base_speed = 200;
+uint8_t base_speed = 100;
 volatile uint8_t status_to_send = 0;
 
 uint32_t adc_buffer[8];
@@ -95,7 +97,7 @@ static void MX_NVIC_Init(void);
 void setMotorSpeed(uint8_t motor, int32_t speed);
 float line_data(void);
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size);
-void send_telemetry_data(float current_position) ;
+void send_telemetry_data(float current_position,float pid_err, float pid_out) ;
 
 /* USER CODE END PFP */
 
@@ -144,7 +146,7 @@ float line_data(void) {
     return (float)weighted_sum / (float)sum;
 }
 
-void send_telemetry_data(float current_position) {
+void send_telemetry_data(float current_position,float pid_err, float pid_out) {
     static TelemetryPacket packet;
 
     // 1. Set header
@@ -167,6 +169,8 @@ void send_telemetry_data(float current_position) {
     packet.kd = Kd;
     packet.threshold = sensor_threshold;
     packet.base_speed = (uint8_t)base_speed;
+    packet.pid_error = pid_err;
+    packet.pid_output = pid_out;
 
     // 5. Transmit the packet
     HAL_UART_Transmit(&huart6, (uint8_t*)&packet, sizeof(TelemetryPacket), 100);
@@ -301,6 +305,8 @@ int main(void)
   {
     /* USER CODE END WHILE */
 	  uint32_t current_time = HAL_GetTick();
+	  float32_t error = 0.0f;
+	  float32_t output = 0.0f;
 	  if (current_time - last_telemetry_time >= TELEMETRY_INTERVAL_MS){
 	      last_telemetry_time = current_time;
 
@@ -316,11 +322,13 @@ int main(void)
 	      if (position == 255) {
 //	    	reset pid
 	    	arm_pid_reset_f32(&pid);
-	        setMotorSpeed(0, -base_speed);
-	        setMotorSpeed(1, base_speed);
+	        setMotorSpeed(0, -base_speed/2);
+	        setMotorSpeed(1, base_speed/2);
 	      } else {
-	        float32_t error = ((float32_t)position - 35.0f);
-	        float32_t output = arm_pid_f32(&pid, error);
+	        error = ((float32_t)position - 35.0f);
+	        output = arm_pid_f32(&pid, error);
+	        if (output > base_speed) output = base_speed;
+	        if (output < -base_speed) output = -base_speed;
 
 
 	        // Adjust motor speeds
@@ -329,7 +337,7 @@ int main(void)
 	      }
 
 
-	      send_telemetry_data(position);
+	      send_telemetry_data(position,error,output);
 	    }
 
 
