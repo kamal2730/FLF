@@ -67,7 +67,7 @@ UART_HandleTypeDef huart6;
 DMA_HandleTypeDef hdma_usart6_rx;
 
 /* USER CODE BEGIN PV */
-float32_t Kp = 2.5f, Ki = 0.0f, Kd = 1.2f;
+float32_t Kp = 2.5f, Ki = 0.0f, Kd = 0.0f;
 uint16_t sensor_threshold = 900;
 uint8_t base_speed = 100;
 volatile uint8_t status_to_send = 0;
@@ -81,6 +81,8 @@ arm_pid_instance_f32 pid;
 uint8_t rx_buffer[RX_BUFFER_SIZE];
 uint32_t last_telemetry_time = 0; // Stores the last time we sent data
 const uint32_t TELEMETRY_INTERVAL_MS = 20;
+
+int last_known_turn_direction = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -307,6 +309,10 @@ int main(void)
 	  uint32_t current_time = HAL_GetTick();
 	  float32_t error = 0.0f;
 	  float32_t output = 0.0f;
+
+
+
+
 	  if (current_time - last_telemetry_time >= TELEMETRY_INTERVAL_MS){
 	      last_telemetry_time = current_time;
 
@@ -317,24 +323,37 @@ int main(void)
 
 	      HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 8);
 	      position = line_data();
+	      last_known_turn_direction = (position > 52 && position <= 70) ? -1 : ((position < 20 && position != 255) ? 1 : last_known_turn_direction);
 
 
 	      if (position == 255) {
-//	    	reset pid
-	    	arm_pid_reset_f32(&pid);
-	        setMotorSpeed(0, -base_speed/2);
-	        setMotorSpeed(1, base_speed/2);
-	      } else {
-	        error = ((float32_t)position - 35.0f);
-	        output = arm_pid_f32(&pid, error);
-	        if (output > base_speed) output = base_speed;
-	        if (output < -base_speed) output = -base_speed;
 
+	              arm_pid_reset_f32(&pid);
 
-	        // Adjust motor speeds
-	        setMotorSpeed(0, base_speed - (int32_t)output);
-	        setMotorSpeed(1, base_speed + (int32_t)output);
-	      }
+	              if (last_known_turn_direction == 1) { // We were heading into a right turn
+	                  setMotorSpeed(0, base_speed/2);
+	                  setMotorSpeed(1, -base_speed/2);
+	              } else if (last_known_turn_direction == -1) { // We were heading into a left turn
+	                  setMotorSpeed(0, -base_speed/2);
+	                  setMotorSpeed(1, base_speed/2);
+	              } else {
+	                  // Line lost unexpectedly on a straight, just stop for safety.
+	                  setMotorSpeed(0, 0);
+	                  setMotorSpeed(1, 0);
+	              }
+	            } else {
+	              error = ((float32_t)position - 35.0f);
+	              output = arm_pid_f32(&pid, error);
+	              if (output > base_speed) output = base_speed;
+	              if (output < -base_speed) output = -base_speed;
+
+	              setMotorSpeed(0, base_speed - (int32_t)output);
+	              setMotorSpeed(1, base_speed + (int32_t)output);
+
+	              if (position > 25 && position < 45) {
+	                  last_known_turn_direction = 0;
+	              }
+	            }
 
 
 	      send_telemetry_data(position,error,output);
