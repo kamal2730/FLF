@@ -335,16 +335,20 @@ int main(void)
 	              if (last_known_turn_direction == 1) { // We were heading into a right turn
 	                  setMotorSpeed(0, turn_speed);
 	                  setMotorSpeed(1, -turn_speed);
+	                  status_to_send = 4;
 	              } else if (last_known_turn_direction == -1) { // We were heading into a left turn
 	                  setMotorSpeed(0, -turn_speed);
 	                  setMotorSpeed(1, turn_speed);
+	                  status_to_send = 5;
 	              } else {
 	            	  if (last_last_known_turn_direction == 1) { // We were heading into a right turn
 	            		  setMotorSpeed(0, turn_speed);
 	            		  setMotorSpeed(1, -turn_speed);
+	            		  status_to_send = 6;
 	            	  } else if (last_last_known_turn_direction == -1) { // We were heading into a left turn
 	            		  setMotorSpeed(0, -turn_speed);
 	            		  setMotorSpeed(1, turn_speed);
+	            		  status_to_send = 7;
 	            	  }
 	              }
 	            } else {
