@@ -193,45 +193,47 @@ void handle_received_command(uint8_t* buffer, uint16_t len) {
 
   // Check if the separator was found
   if (colon_ptr != NULL) {
-    // If found, temporarily replace it with a null terminator
-    // to split the string into two parts: the KEY and the VALUE.
     *colon_ptr = '\0';
-
-    // The first part of the string is now the KEY
     char* key = cmd_string;
-
-    // The part after the original colon is the VALUE string
     char* value_str = colon_ptr + 1;
-
-    // Convert the value string to a float
     float value = atof(value_str);
 
-    // Now, compare the key and update the corresponding variable
+    // --- NEW: Flag to check if we need to re-initialize PID ---
+    uint8_t pid_constants_changed = 0;
+
     if (strcmp(key, "KP") == 0) {
       Kp = value;
-      status_to_send = 1; // Set status to "Constants Updated"
+      pid_constants_changed = 1; // Mark that a PID constant has changed
     } else if (strcmp(key, "KI") == 0) {
       Ki = value;
-      status_to_send = 1;
+      pid_constants_changed = 1; // Mark that a PID constant has changed
     } else if (strcmp(key, "KD") == 0) {
       Kd = value;
-      status_to_send = 1;
+      pid_constants_changed = 1; // Mark that a PID constant has changed
     } else if (strcmp(key, "TH") == 0) {
       sensor_threshold = (uint16_t)value;
       status_to_send = 1;
     } else if (strcmp(key, "BS") == 0) {
-      base_speed = (int32_t)value;
+      base_speed = (uint8_t)value; // Cast to uint8_t for consistency
       status_to_send = 1;
     } else {
-      // The key was valid, but not one we recognize
       status_to_send = 200; // "ERROR: Unknown Command"
     }
+
+    // --- NEW: If any PID constant was changed, update the struct and re-init ---
+    if (pid_constants_changed) {
+        pid.Kp = Kp;
+        pid.Ki = Ki;
+        pid.Kd = Kd;
+        arm_pid_init_f32(&pid, 1); // This is the crucial step!
+        status_to_send = 1;        // Set status to "Constants Updated"
+    }
+
   } else {
     // The colon separator was not found, so the format is wrong.
     status_to_send = 200; // "ERROR: Unknown Command"
   }
 }
-
 
 // This callback is automatically called by the HAL when a command arrives.
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
@@ -318,12 +320,6 @@ int main(void)
 
 	  if (current_time - last_telemetry_time >= TELEMETRY_INTERVAL_MS){
 	      last_telemetry_time = current_time;
-
-	      pid.Kp = Kp;
-	      pid.Ki = Ki;
-	      pid.Kd = Kd;
-
-
 	      HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 8);
 	      position = line_data();
 	      if (last_known_turn_direction!=0){
