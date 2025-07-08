@@ -94,7 +94,7 @@ PID_Controller pid;
 #define RX_BUFFER_SIZE 32
 uint8_t rx_buffer[RX_BUFFER_SIZE];
 uint32_t last_telemetry_time = 0; // Stores the last time we sent data
-const uint32_t TELEMETRY_INTERVAL_MS = 20;
+const uint32_t TELEMETRY_INTERVAL_MS = 10;
 
 int last_known_turn_direction = 0;
 int last_last_known_turn_direction=1;
@@ -386,18 +386,18 @@ int main(void)
 	  float32_t error = 0.0f;
 	  float32_t output = 0.0f;
 
-	  if (current_time - last_telemetry_time >= TELEMETRY_INTERVAL_MS){
+	  if (current_time - last_telemetry_time >= TELEMETRY_INTERVAL_MS)
+	  {
 	      last_telemetry_time = current_time;
 	      HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 8);
 	      float32_t dt_sec = (float32_t)TELEMETRY_INTERVAL_MS / 1000.0f;
 	      position = line_data();
-	      if (last_known_turn_direction!=0){
-	    	  last_last_known_turn_direction=last_known_turn_direction;
-	      }
+
 	      last_known_turn_direction = (position > 52 && position <= 70) ? -1 : ((position < 20 && position != 255) ? 1 : last_known_turn_direction);
 
 
-	      if (position == 255) {
+	      if (position == 255)
+	      {
 	    	  PID_Reset(&pid);
 	    	  if (last_known_turn_direction == 1) { // We were heading into a right turn
 	    		  setMotorSpeed(0, turn_speed);
@@ -407,26 +407,13 @@ int main(void)
 	    		  setMotorSpeed(0, -turn_speed);
 	    		  setMotorSpeed(1, turn_speed);
 	    		  status_to_send = 5;
-	    	  } else {
-	    		  if (last_last_known_turn_direction == 1) { // We were heading into a right turn
-	    			  setMotorSpeed(0, turn_speed);
-	    			  setMotorSpeed(1, -turn_speed);
-	    			  status_to_send = 6;
-	    		  } else if (last_last_known_turn_direction == -1) { // We were heading into a left turn
-	    			  setMotorSpeed(0, -turn_speed);
-	    			  setMotorSpeed(1, turn_speed);
-	    			  status_to_send = 7;
-	    		  }
 	    	  }
+
 	      } else {
 	    	  output = PID_Update(&pid, position, dt_sec);
 	    	  error = pid.setpoint - position;
 	    	  setMotorSpeed(0, base_speed + (int32_t)output);
 	    	  setMotorSpeed(1, base_speed - (int32_t)output);
-
-	    	  if (position > 25 && position < 45) {
-	    		  last_known_turn_direction = 0;
-	    	  }
 	      }
 
 
