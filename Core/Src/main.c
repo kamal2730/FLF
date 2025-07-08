@@ -43,6 +43,19 @@ typedef struct __attribute__((packed)) {
   float 	pid_error;
   float 	pid_output;
 } TelemetryPacket;
+
+typedef struct {
+    float32_t Kp;
+    float32_t Ki;
+    float32_t Kd;
+
+    float32_t setpoint;
+    float32_t integral;
+    float32_t prev_error;
+
+    float32_t output_min;
+    float32_t output_max;
+} PID_Controller;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -76,7 +89,7 @@ volatile uint8_t status_to_send = 0;
 uint32_t adc_buffer[8];
 uint32_t sensorWeight[8] = {70, 60, 50, 40, 30, 20, 10, 0};
 float32_t position;
-arm_pid_instance_f32 pid;
+PID_Controller pid;
 
 #define RX_BUFFER_SIZE 32
 uint8_t rx_buffer[RX_BUFFER_SIZE];
@@ -102,6 +115,11 @@ void setMotorSpeed(uint8_t motor, int32_t speed);
 float line_data(void);
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size);
 void send_telemetry_data(float current_position,float pid_err, float pid_out) ;
+void handle_received_command(uint8_t* buffer, uint16_t len);
+void PID_Init(PID_Controller *pid, float32_t setpoint, float32_t out_min, float32_t out_max);
+float32_t PID_Update(PID_Controller *pid, float32_t measured_value, float32_t dt);
+void PID_Reset(PID_Controller *pid);
+
 
 /* USER CODE END PFP */
 
@@ -215,6 +233,8 @@ void handle_received_command(uint8_t* buffer, uint16_t len) {
       status_to_send = 1;
     } else if (strcmp(key, "BS") == 0) {
       base_speed = (uint8_t)value; // Cast to uint8_t for consistency
+      pid.output_min = -base_speed;
+      pid.output_max = base_speed;
       status_to_send = 1;
     } else {
       status_to_send = 200; // "ERROR: Unknown Command"
@@ -225,7 +245,6 @@ void handle_received_command(uint8_t* buffer, uint16_t len) {
         pid.Kp = Kp;
         pid.Ki = Ki;
         pid.Kd = Kd;
-        arm_pid_init_f32(&pid, 1); // This is the crucial step!
         status_to_send = 1;        // Set status to "Constants Updated"
     }
 
@@ -245,6 +264,63 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
         HAL_UARTEx_ReceiveToIdle_DMA(&huart6, rx_buffer, RX_BUFFER_SIZE);
         __HAL_DMA_DISABLE_IT(&hdma_usart6_rx, DMA_IT_HT);
     }
+}
+
+void PID_Init(PID_Controller *pid, float32_t setpoint, float32_t out_min, float32_t out_max)  {
+    pid->Kp = Kp;
+    pid->Ki = Ki;
+    pid->Kd = Kd;
+    pid->setpoint = setpoint;
+    pid->output_min = out_min;
+    pid->output_max = out_max;
+    pid->integral = 0.0f;
+    pid->prev_error = 0.0f;
+}
+
+
+float32_t PID_Update(PID_Controller *pid, float32_t measured_value, float32_t dt) {
+    // 1. Calculate Error
+    float32_t error = pid->setpoint - measured_value;
+
+    // 2. Proportional term
+    float32_t p_term = pid->Kp * error;
+
+    // 3. Integral term (with anti-windup)
+    pid->integral += error * dt;
+    // Clamp the integral to prevent windup
+    if (pid->integral > pid->output_max) {
+        pid->integral = pid->output_max;
+    } else if (pid->integral < pid->output_min) {
+        pid->integral = pid->output_min;
+    }
+    float32_t i_term = pid->Ki * pid->integral;
+
+    // 4. Derivative term (with division-by-zero safety check)
+    float32_t derivative = 0.0f;
+    if (dt > 0.00001f) {
+        derivative = (error - pid->prev_error) / dt;
+    }
+    float32_t d_term = pid->Kd * derivative;
+
+    // 5. Calculate total output
+    float32_t output = p_term + i_term + d_term;
+
+    // 6. Clamp the final output
+    if (output > pid->output_max) {
+        output = pid->output_max;
+    } else if (output < pid->output_min) {
+        output = pid->output_min;
+    }
+
+    // 7. Save current error for next iteration
+    pid->prev_error = error;
+
+    return output;
+}
+
+void PID_Reset(PID_Controller *pid) {
+    pid->integral = 0.0f;
+    pid->prev_error = 0.0f;
 }
 /* USER CODE END 0 */
 
@@ -296,13 +372,8 @@ int main(void)
   HAL_UARTEx_ReceiveToIdle_DMA(&huart6, rx_buffer, RX_BUFFER_SIZE);
   __HAL_DMA_DISABLE_IT(&hdma_usart6_rx, DMA_IT_HT);
 
+  PID_Init(&pid, 35.0f, -base_speed, base_speed);
 
-
-  pid.Kp=Kp;
-  pid.Ki=Ki;
-  pid.Kd=Kd;
-
-  arm_pid_init_f32(&pid, 1);
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 8);
   /* USER CODE END 2 */
 
@@ -315,12 +386,10 @@ int main(void)
 	  float32_t error = 0.0f;
 	  float32_t output = 0.0f;
 
-
-
-
 	  if (current_time - last_telemetry_time >= TELEMETRY_INTERVAL_MS){
 	      last_telemetry_time = current_time;
 	      HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 8);
+	      float32_t dt_sec = (float32_t)TELEMETRY_INTERVAL_MS / 1000.0f;
 	      position = line_data();
 	      if (last_known_turn_direction!=0){
 	    	  last_last_known_turn_direction=last_known_turn_direction;
@@ -329,41 +398,36 @@ int main(void)
 
 
 	      if (position == 255) {
+	    	  PID_Reset(&pid);
+	    	  if (last_known_turn_direction == 1) { // We were heading into a right turn
+	    		  setMotorSpeed(0, turn_speed);
+	    		  setMotorSpeed(1, -turn_speed);
+	    		  status_to_send = 4;
+	    	  } else if (last_known_turn_direction == -1) { // We were heading into a left turn
+	    		  setMotorSpeed(0, -turn_speed);
+	    		  setMotorSpeed(1, turn_speed);
+	    		  status_to_send = 5;
+	    	  } else {
+	    		  if (last_last_known_turn_direction == 1) { // We were heading into a right turn
+	    			  setMotorSpeed(0, turn_speed);
+	    			  setMotorSpeed(1, -turn_speed);
+	    			  status_to_send = 6;
+	    		  } else if (last_last_known_turn_direction == -1) { // We were heading into a left turn
+	    			  setMotorSpeed(0, -turn_speed);
+	    			  setMotorSpeed(1, turn_speed);
+	    			  status_to_send = 7;
+	    		  }
+	    	  }
+	      } else {
+	    	  output = PID_Update(&pid, position, dt_sec);
+	    	  error = pid.setpoint - position;
+	    	  setMotorSpeed(0, base_speed + (int32_t)output);
+	    	  setMotorSpeed(1, base_speed - (int32_t)output);
 
-	              arm_pid_reset_f32(&pid);
-
-	              if (last_known_turn_direction == 1) { // We were heading into a right turn
-	                  setMotorSpeed(0, turn_speed);
-	                  setMotorSpeed(1, -turn_speed);
-	                  status_to_send = 4;
-	              } else if (last_known_turn_direction == -1) { // We were heading into a left turn
-	                  setMotorSpeed(0, -turn_speed);
-	                  setMotorSpeed(1, turn_speed);
-	                  status_to_send = 5;
-	              } else {
-	            	  if (last_last_known_turn_direction == 1) { // We were heading into a right turn
-	            		  setMotorSpeed(0, turn_speed);
-	            		  setMotorSpeed(1, -turn_speed);
-	            		  status_to_send = 6;
-	            	  } else if (last_last_known_turn_direction == -1) { // We were heading into a left turn
-	            		  setMotorSpeed(0, -turn_speed);
-	            		  setMotorSpeed(1, turn_speed);
-	            		  status_to_send = 7;
-	            	  }
-	              }
-	            } else {
-	              error = ((float32_t)position - 35.0f);
-	              output = arm_pid_f32(&pid, error);
-	              if (output > base_speed) output = base_speed;
-	              if (output < -base_speed) output = -base_speed;
-
-	              setMotorSpeed(0, base_speed - (int32_t)output);
-	              setMotorSpeed(1, base_speed + (int32_t)output);
-
-	              if (position > 25 && position < 45) {
-	                  last_known_turn_direction = 0;
-	              }
-	            }
+	    	  if (position > 25 && position < 45) {
+	    		  last_known_turn_direction = 0;
+	    	  }
+	      }
 
 
 	      send_telemetry_data(position,error,output);
